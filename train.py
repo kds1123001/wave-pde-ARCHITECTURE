@@ -80,7 +80,7 @@ def train_model(name, model, n_steps=STEPS):
     return model
 
 
-max_dist_possible = max(H, W) - 1  # Chebyshev distance on an 8x8 grid of indices 0..7 tops out at 7
+max_dist_possible = max(H, W) - 1  
 
 def eval_by_distance(name, model, buckets=((1, 2), (3, 4), (5, 6), (7, 7)), n_batches=20):
     print(f"  eval [{name}] accuracy by query-match distance:")

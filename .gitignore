@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.npy
+run_log.txt
+multiseed_log.txt
+.DS_Store

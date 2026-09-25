@@ -11,7 +11,7 @@ def glorot(shape):
 
 
 def build_laplacian(H, W):
-    # standard 5-point stencil, zero-dirichlet boundary (missing neighbors just don't contribute)
+ 
     N = H * W
     L = np.zeros((N, N))
     def idx(r, c):
@@ -30,7 +30,7 @@ def build_laplacian(H, W):
 
 
 def build_multigrid_ops(H, W, factor=2):
-    # simple 2x2 average pooling for restriction, transpose (scaled) for prolongation
+   
     Hc, Wc = H // factor, W // factor
     N, Nc = H * W, Hc * Wc
     P = np.zeros((Nc, N))
@@ -41,7 +41,7 @@ def build_multigrid_ops(H, W, factor=2):
                 for dc in range(factor):
                     r, c = rc * factor + dr, cc * factor + dc
                     P[ci, r * W + c] = 1.0 / (factor * factor)
-    U = P.T * (factor * factor)  # adjoint of the pooling, rescaled so it's a real "spread" op
+    U = P.T * (factor * factor)  
     return P, U
 
 
@@ -61,15 +61,12 @@ class Linear:
         return [self.W] + ([self.b] if self.b is not None else [])
 
 
-# ---------------------------------------------------------------------------
-# Model 1: bidirectional diagonal linear recurrent SSM (S4D/LRU-ish), the
-# baseline every real sequence architecture gets compared to these days.
-# ---------------------------------------------------------------------------
+
 class SSMBaseline:
     def __init__(self, d_in, d_state, C, seq_len):
         self.d_state = d_state
         self.in_proj = Linear(d_in, d_state)
-        # per-channel decay, parameterized so it always lands in (0,1)
+       
         self.a_fwd_raw = Tensor(rng_init.uniform(-2, 2, size=(1, d_state)))
         self.a_bwd_raw = Tensor(rng_init.uniform(-2, 2, size=(1, d_state)))
         self.readout1 = Linear(2 * d_state, 4 * d_state)
@@ -83,9 +80,9 @@ class SSMBaseline:
     def forward(self, X_np, query_idx):
         B, N, _ = X_np.shape
         x = Tensor(X_np)
-        u = self.in_proj(x)  # (B, N, d)
+        u = self.in_proj(x) 
 
-        a_fwd = self.a_fwd_raw.sigmoid()  # (1, d), in (0,1)
+        a_fwd = self.a_fwd_raw.sigmoid()  
         a_bwd = self.a_bwd_raw.sigmoid()
 
         h = Tensor(np.zeros((B, self.d_state)))
@@ -101,8 +98,7 @@ class SSMBaseline:
             bwd_states[t] = h
 
         query_idx = np.asarray(query_idx)
-        # gather each batch row's hidden state at its own query timestep,
-        # keeping the autograd graph intact (can't just numpy-index the .data)
+        
         rows = []
         for b in range(B):
             t = int(query_idx[b])
@@ -127,24 +123,19 @@ class SSMBaseline:
         return self.readout2(h)
 
 
-# ---------------------------------------------------------------------------
-# Model 2: local-only wave PDE (leapfrog, fixed graph Laplacian, surrogate
-# threshold nonlinearity). No shortcut connections -- info can only move one
-# grid cell per timestep, so this is the model that should choke on the
-# CFL-bound long-range pairs.
-# ---------------------------------------------------------------------------
+
 class LocalWaveModel:
     def __init__(self, d_in, d, C, H, W, T):
         self.H, self.W, self.T, self.d = H, W, T, d
-        self.L = Tensor(build_laplacian(H, W), requires_grad=False)  # fixed graph, not learned
+        self.L = Tensor(build_laplacian(H, W), requires_grad=False)  
         self.in_proj = Linear(d_in, d)
         self.nl_mix = Linear(d, d, bias=False)
         self.readout1 = Linear(d, 2 * d)
         self.readout2 = Linear(2 * d, C)
 
-        # scalar PDE coefficients, squashed into stable ranges via sigmoid
-        self.coeff_raw = Tensor(np.array([0.0]))   # -> c^2*dt^2, kept small for CFL stability
-        self.damp_raw = Tensor(np.array([0.0]))    # -> gamma*dt
+      
+        self.coeff_raw = Tensor(np.array([0.0])) 
+        self.damp_raw = Tensor(np.array([0.0]))    
         self.tau = Tensor(np.array([0.3]))
         self.alpha = Tensor(np.array([4.0]))
 
@@ -153,10 +144,10 @@ class LocalWaveModel:
                 + self.readout2.params() + [self.coeff_raw, self.damp_raw, self.tau, self.alpha])
 
     def _step(self, psi, psi_prev, L):
-        coeff = self.coeff_raw.sigmoid() * 0.18   # keep well under CFL limit for the 5-pt stencil
+        coeff = self.coeff_raw.sigmoid() * 0.18  
         damp = self.damp_raw.sigmoid() * 0.3
         lap = L @ psi
-        # surrogate threshold firing, applied per-channel on a scalar "energy" proxy
+       
         energy = (psi * psi).sum(axis=-1, keepdims=True)
         fire = ((energy - self.tau) * self.alpha).sigmoid()
         nl_term = fire * self.nl_mix(psi)
@@ -166,7 +157,7 @@ class LocalWaveModel:
     def forward(self, X_np, query_idx):
         B, N, _ = X_np.shape
         x = Tensor(X_np)
-        psi0 = self.in_proj(x)  # (B, N, d), also the source injection
+        psi0 = self.in_proj(x)
         psi_prev, psi = psi0, psi0
         L = self.L
         for _ in range(self.T):
@@ -182,12 +173,7 @@ class LocalWaveModel:
         return self.readout2(h)
 
 
-# ---------------------------------------------------------------------------
-# Model 3: multigrid wave -- same local leapfrog core as above, but every
-# step also does a coarse-grid hop (pool -> dense mix -> unpool) so distant
-# cells can talk in O(1) steps instead of waiting for the wavefront to
-# physically cross the grid.
-# ---------------------------------------------------------------------------
+
 class MultigridWaveModel(LocalWaveModel):
     def __init__(self, d_in, d, C, H, W, T, factor=2):
         super().__init__(d_in, d, C, H, W, T)
@@ -196,15 +182,15 @@ class MultigridWaveModel(LocalWaveModel):
         self.U = Tensor(self.U, requires_grad=False)
         Nc = self.P.data.shape[0]
         self.coarse_mix = Linear(d, d, bias=True)
-        self.coarse_gate_raw = Tensor(np.array([0.0]))  # how much the coarse hop feeds back into fine grid
+        self.coarse_gate_raw = Tensor(np.array([0.0]))  
 
     def params(self):
         return super().params() + self.coarse_mix.params() + [self.coarse_gate_raw]
 
     def _coarse_hop(self, psi):
-        coarse = self.P @ psi                    # (B, Nc, d) -- restrict to coarse grid
-        mixed = self.coarse_mix(coarse).tanh()    # dense all-to-all mixing on the small coarse grid
-        fine_correction = self.U @ mixed          # prolongate back
+        coarse = self.P @ psi                   
+        mixed = self.coarse_mix(coarse).tanh()    
+        fine_correction = self.U @ mixed         
         gate = self.coarse_gate_raw.sigmoid() * 0.3
         return fine_correction * gate
 
@@ -221,12 +207,7 @@ class MultigridWaveModel(LocalWaveModel):
         return self._gather_and_readout(psi, query_idx)
 
 
-# ---------------------------------------------------------------------------
-# Model 4: same as MultigridWaveModel, but the restriction/prolongation are
-# LEARNED instead of fixed average-pool/transpose. This tests the aliasing
-# hypothesis directly: does average-pooling smear the exact key vector into
-# noise, and does letting the net learn what to keep fix it?
-# ---------------------------------------------------------------------------
+
 class LearnedPoolMultigridWaveModel(LocalWaveModel):
     def __init__(self, d_in, d, C, H, W, T, factor=2):
         super().__init__(d_in, d, C, H, W, T)
@@ -234,15 +215,13 @@ class LearnedPoolMultigridWaveModel(LocalWaveModel):
         self.Hc, self.Wc = H // factor, W // factor
         self.Nc = self.Hc * self.Wc
         block = factor * factor
-        # restriction: concat the (factor x factor) block's raw features and
-        # project down -- no averaging, the net decides what survives
+       
         self.restrict = Linear(block * d, d)
-        # prolongation: project coarse state back up to a full block, instead
-        # of just copying/spreading the same value to every fine cell
+      
         self.prolong = Linear(d, block * d)
         self.coarse_mix = Linear(d, d, bias=True)
         self.coarse_gate_raw = Tensor(np.array([0.0]))
-        # fixed index map so we can gather/scatter blocks without a python loop per batch
+       
         self._block_idx = self._make_block_index(H, W, factor)
 
     @staticmethod
@@ -267,20 +246,20 @@ class LearnedPoolMultigridWaveModel(LocalWaveModel):
     def _coarse_hop(self, psi):
         B = psi.data.shape[0]
         d = self.d
-        # gather each block's cells and concat their features -- (B, Nc, factor^2 * d)
-        blocks = psi[:, self._block_idx, :]           # (B, Nc, block, d) via fancy indexing
-        blocks_flat = blocks.reshape(B, self.Nc, -1)  # (B, Nc, block*d)
-        coarse = self.restrict(blocks_flat)           # (B, Nc, d) -- learned, not averaged
+       
+        blocks = psi[:, self._block_idx, :]           
+        blocks_flat = blocks.reshape(B, self.Nc, -1)  
+        coarse = self.restrict(blocks_flat)           
         mixed = self.coarse_mix(coarse).tanh()
-        expanded = self.prolong(mixed)                 # (B, Nc, block*d)
+        expanded = self.prolong(mixed)                
         expanded = expanded.reshape(B, self.Nc, self._block_idx.shape[1], d)
-        # scatter back to fine grid positions (differentiable, see _scatter below)
+        
         out = self._scatter(expanded, B, d)
         gate = self.coarse_gate_raw.sigmoid() * 0.3
         return out * gate
 
     def _scatter(self, expanded, B, d):
-        idx = self._block_idx  # (Nc, block)
+        idx = self._block_idx 
         N = self.H * self.W
         out_data = np.zeros((B, N, d))
         for ci in range(idx.shape[0]):
@@ -309,14 +288,7 @@ class LearnedPoolMultigridWaveModel(LocalWaveModel):
         return self._gather_and_readout(psi, query_idx)
 
 
-# ---------------------------------------------------------------------------
-# Model 5: coarse level gets its OWN persistent wave dynamics (own Laplacian,
-# own leapfrog recurrence, own threshold nonlinearity), evolving across the
-# whole T-step rollout and continuously driven by the restricted fine state.
-# The bet from the diagnostics above: a single dense mix per step isn't
-# enough "depth" for the coarse pathway to do anything useful; a coarse grid
-# small enough to fully mix within T steps (its own diameter << T) should.
-# ---------------------------------------------------------------------------
+
 class RecurrentCoarseMultigridWaveModel(LocalWaveModel):
     def __init__(self, d_in, d, C, H, W, T, factor=2):
         super().__init__(d_in, d, C, H, W, T)
@@ -327,14 +299,14 @@ class RecurrentCoarseMultigridWaveModel(LocalWaveModel):
         self.P = Tensor(P_np, requires_grad=False)
         self.U = Tensor(U_np, requires_grad=False)
 
-        # coarse level is a small copy of the same wave machinery, own params
+       
         self.coarse_nl_mix = Linear(d, d, bias=False)
         self.coarse_coeff_raw = Tensor(np.array([0.0]))
         self.coarse_damp_raw = Tensor(np.array([0.0]))
         self.coarse_tau = Tensor(np.array([0.3]))
         self.coarse_alpha = Tensor(np.array([4.0]))
-        self.inject_gate_raw = Tensor(np.array([0.0]))   # fine -> coarse driving strength
-        self.feedback_gate_raw = Tensor(np.array([0.0])) # coarse -> fine feedback strength
+        self.inject_gate_raw = Tensor(np.array([0.0]))  
+        self.feedback_gate_raw = Tensor(np.array([0.0])) 
 
     def params(self):
         return (super().params() + self.coarse_nl_mix.params() +
@@ -342,7 +314,7 @@ class RecurrentCoarseMultigridWaveModel(LocalWaveModel):
                  self.coarse_alpha, self.inject_gate_raw, self.feedback_gate_raw])
 
     def _coarse_step(self, psi_c, psi_c_prev, source):
-        coeff = self.coarse_coeff_raw.sigmoid() * 0.5   # coarse grid is tiny, can afford a looser CFL bound
+        coeff = self.coarse_coeff_raw.sigmoid() * 0.5   
         damp = self.coarse_damp_raw.sigmoid() * 0.3
         lap = self.Lc @ psi_c
         energy = (psi_c * psi_c).sum(axis=-1, keepdims=True)
@@ -364,7 +336,7 @@ class RecurrentCoarseMultigridWaveModel(LocalWaveModel):
         feedback_gate = self.feedback_gate_raw.sigmoid() * 0.3
 
         for _ in range(self.T):
-            source = self.P @ psi  # restrict current fine state -- drives the coarse PDE
+            source = self.P @ psi 
             psi_c_next = self._coarse_step(psi_c, psi_c_prev, source)
 
             fine_correction = (self.U @ psi_c) * feedback_gate

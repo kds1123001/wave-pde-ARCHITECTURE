@@ -4,18 +4,17 @@ from autograd import Tensor
 from task import make_batch
 from models import SSMBaseline, LocalWaveModel, MultigridWaveModel
 
-# ---- config, kept small since this is running on plain numpy / 1 cpu ----
+
 H, W = 8, 8
 N = H * W
-DK = 6      # key vector dim
-C = 4       # number of value classes
-K = 4       # storage cells per sample (incl. query + match)
+DK = 6     
+C = 4      
+K = 4      
 D_STATE = 12
 BATCH = 24
 STEPS = 400
 LR = 0.02
-WAVE_T = 6  # leapfrog steps -- deliberately less than grid diameter (~14) so the
-            # local-only model CAN'T fully propagate signal across the grid
+WAVE_T = 6  
 
 seed = 0
 rng = np.random.default_rng(seed)

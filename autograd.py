@@ -1,12 +1,4 @@
-"""
-Minimal reverse-mode autograd engine, numpy-backed.
-Supports just enough ops to build SSM / wave-PDE models: matmul, elementwise
-arithmetic, sigmoid/tanh, sum/mean, reshape, indexing, and softmax cross-entropy.
 
-This is the practical stand-in for the "adjoint sensitivity" backward pass
-discussed analytically in the paper draft: reverse-mode autodiff over the
-discrete update equations IS the discretize-then-optimize adjoint method.
-"""
 import numpy as np
 
 class Tensor:
@@ -23,10 +15,10 @@ class Tensor:
     def __repr__(self):
         return f"Tensor(shape={self.data.shape}, op={self._op})"
 
-    # ---------- helpers for broadcasting-safe grad accumulation ----------
+  
     @staticmethod
     def _unbroadcast(grad, shape):
-        # sum-reduce grad to match target shape (undo numpy broadcasting)
+       
         while grad.ndim > len(shape):
             grad = grad.sum(axis=0)
         for i, s in enumerate(shape):
@@ -34,7 +26,7 @@ class Tensor:
                 grad = grad.sum(axis=i, keepdims=True)
         return grad
 
-    # ---------------------------- ops ----------------------------
+  
     def __add__(self, other):
         other = other if isinstance(other, Tensor) else Tensor(other)
         out = Tensor(self.data + other.data, (self, other), "+")
@@ -83,10 +75,7 @@ class Tensor:
         other = other if isinstance(other, Tensor) else Tensor(other)
         out = Tensor(self.data @ other.data, (self, other), "@")
         def _backward():
-            # compute the raw (possibly over-batched) grads first, THEN reduce
-            # down to the operand's actual shape -- doing the reduction after
-            # an in-place += blows up when one operand isn't batched (e.g. a
-            # fixed NxN operator multiplied against a batched BxNxD tensor)
+           
             g_self = out.grad @ other.data.swapaxes(-1, -2)
             g_self = self._unbroadcast(g_self, self.data.shape)
             self.grad += g_self
@@ -183,7 +172,7 @@ class Tensor:
         out._backward = _backward
         return out, probs
 
-    # ---------------------------- backward ----------------------------
+    
     def backward(self):
         topo = []
         visited = set()

@@ -10,9 +10,7 @@ N_SEEDS = 5
 def train_and_eval(model_ctor, seed):
     import train as train_mod
     import models as models_mod
-    # reseed both the data rng (train_mod.rng, used by make_batch via run_epoch)
-    # and the weight-init rng (models_mod.rng_init, module-level in models.py) --
-    # otherwise every "seed" would still start from identical initial weights
+   
     train_mod.rng = np.random.default_rng(seed)
     models_mod.rng_init = np.random.default_rng(seed + 10_000)
 
